@@ -13,7 +13,7 @@ RUN printf '%s\n' \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
        ca-certificates curl xz-utils build-essential gcc-aarch64-linux-gnu \
-       flex bison libssl-dev device-tree-compiler python3 python3-dev \
+       flex bison libssl-dev device-tree-compiler python3 python3-dev python-is-python3 \
        python3-setuptools swig libgnutls28-dev bc git \
     && rm -rf /var/lib/apt/lists/*
 RUN curl --fail --location --retry 3 \

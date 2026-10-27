@@ -103,8 +103,14 @@ int main(int argc, char **argv)
     card.read_bl_len = (unsigned int)atoi(argv[6]);
     card.write_bl_len = (unsigned int)atoi(argv[7]);
     ret = mmc_write_gpt(0, 0, strtoul(argv[8], NULL, 10), data, size);
-    printf("{\"rc\":%d,\"writes\":%d,\"part_init\":%d}\n",
+    printf("{\"rc\":%d,\"writes\":%d,\"part_init\":%d,\"io\":[",
            ret, calls, initialized);
+    for (int i = 0; i < calls && i < 2; i++) {
+        printf("%s{\"offset\":%llu,\"size\":%zu,\"verify\":%s}",
+               i ? "," : "", write_calls[i].offset, write_calls[i].size,
+               write_calls[i].verify ? "true" : "false");
+    }
+    printf("]}\n");
     free(data);
     return 0;
 }
@@ -152,6 +158,12 @@ int main(int argc, char **argv)
         b = checked_header(s, len(s) - BLOCK)
         entry_bytes = h[11] * h[12]
         table_blocks = (entry_bytes + BLOCK - 1) // BLOCK
+        self.assertEqual(result["io"], [
+            {"offset": 0, "size": (2 + table_blocks) * BLOCK,
+             "verify": True},
+            {"offset": (sectors - 1 - table_blocks) * BLOCK,
+             "size": (table_blocks + 1) * BLOCK, "verify": True},
+        ])
         self.assertEqual((h[5], h[6]), (1, sectors - 1))
         self.assertEqual((b[5], b[6]), (sectors - 1, 1))
         self.assertEqual(b[10], sectors - 1 - table_blocks)

@@ -16,6 +16,7 @@ CLX-S20P **MT7986A／2-GiB DDR4／eMMC** 專用維護分支，fork 自
 本分支將副表回指設為 LBA 1，重算 CRC，並按 entry metadata 推算副表位置。
 刷寫前核對主表／entry CRC、長度、LBA 範圍、分區重疊及設備幾何；驗證失敗
 立即拒寫。驗證／主表／副表寫入錯誤會傳回呼叫者。分區 entry 不移動、不擴容。
+上述拒寫保證限於獨立 GPT 上傳入口；未涵蓋原有先寫 payload 的全碟映像入口。
 
 支援完整 primary-only、512-byte sector、最多 128 個標準 128-byte entry 的
 GPT 上傳；其他格式拒絕。已測試 241696768／244277248 sectors 的合成設備。

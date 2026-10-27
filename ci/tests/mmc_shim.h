@@ -41,6 +41,11 @@ static struct blk_desc desc;
 static struct mmc card;
 static int calls, fail_call, initialized;
 static const char *outputs[2];
+static struct {
+	u64 offset;
+	size_t size;
+	bool verify;
+} write_calls[2];
 
 static struct blk_desc *mmc_get_blk_desc(struct mmc *mmc)
 {
@@ -58,8 +63,12 @@ static int _mmc_write(struct mmc *mmc, u64 offset, size_t max_size,
 		      const void *data, size_t size, bool verify)
 {
 	FILE *out;
-	(void)verify;
 	calls++;
+	if (calls <= 2) {
+		write_calls[calls - 1].offset = offset;
+		write_calls[calls - 1].size = size;
+		write_calls[calls - 1].verify = verify;
+	}
 	if (calls == fail_call)
 		return -EIO;
 	if (calls > 2 || offset % mmc->write_bl_len ||
