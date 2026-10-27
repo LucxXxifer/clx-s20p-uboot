@@ -1,0 +1,20 @@
+{
+  "board": "mt7986_clx_s20",
+  "input_sha256": {
+    "atf-20240117-bacca82a8/configs/mt7986_clx_s20_defconfig": "2d6ee9509c6822dae55af9f2b5dead6242cc7495023ae15fa16e6c0230b3a489",
+    "build.sh": "4aef1824c95f46d3ab1b6b7c67b851f37de715a0316b2cafbc65c3d54fda7582",
+    "uboot-mtk-20250711/arch/arm/dts/mt7986a-clx_s20.dts": "aae2cd6ed9cb352c427789d1ccfc1b17f828363bb6a3aa86444d5fe5a3b161bb",
+    "uboot-mtk-20250711/configs/mt7986_clx_s20_defconfig": "1f02075a94ce5fd330b7ef98435575589a20346551134761578b8db4834c2786",
+    "uboot-mtk-20250711/failsafe/embedded/package-lock.json": "cb568e9b01b3ee8a4fcc29964b915f5244f6aa4a429a483b1f1c0301917c9745",
+    "uboot-mtk-20250711/failsafe/embedded/package.json": "b540e219c9bc817b72c8b7ed72f41bf39e55557950ffcbd98d84ff5e83e913f6"
+  },
+  "node_sha256": "00bbd05e306ea68b6e13e17360d0e2f680b493ef95f2fea1c4296ff7437530bc",
+  "node_version": "22.20.0",
+  "review_note": "Reviewed GPT writer and CLX-S20 2GiB DDR4/eMMC source; hardware validation pending.",
+  "schema": 1,
+  "ubuntu_snapshot": "20261026T000000Z",
+  "upstream_branch": "master",
+  "upstream_sha": "e4cf4dc72d451dc7a86c9508390ad5a2e50743c4",
+  "upstream_url": "https://github.com/Yuzhii0718/bl-mt798x-dhcpd.git",
+  "version": "SP2"
+}
