@@ -1,0 +1,243 @@
+diff --git a/uboot-mtk-20250711/board/mediatek/common/mmc_helper.c b/uboot-mtk-20250711/board/mediatek/common/mmc_helper.c
+index 01ba1b74..396cb542 100644
+--- a/uboot-mtk-20250711/board/mediatek/common/mmc_helper.c
++++ b/uboot-mtk-20250711/board/mediatek/common/mmc_helper.c
+@@ -521,71 +521,105 @@ int mmc_erase_part(u32 dev, int hwpart, const char *part_name, u64 offset,
+ 
+ static int adjust_gpt(struct mmc *mmc, void *data, size_t size)
+ {
+-	u64 lastlba, adjusted_last_usable_lba, secondary_lba_num;
+-	u32 crc32_backup = 0, calc_crc32;
++	u64 lastlba, last_usable, first_usable, old_last, alternate;
++	u64 start, end, previous_start, previous_end;
++	u32 count, entry_bytes, entry_blocks, crc32_backup, i, j;
++	efi_guid_t empty_guid = { 0 };
++	gpt_entry entry, previous;
++	legacy_mbr mbr;
+ 	gpt_header gpt;
+ 
+-	if (size < (GPT_PRIMARY_PARTITION_TABLE_LBA + 1) * mmc->read_bl_len)
++	/* This upload path accepts only a complete primary GPT for 512B media. */
++	if (mmc->read_bl_len != 512 || mmc->write_bl_len != 512 ||
++	    size < 2 * mmc->read_bl_len)
+ 		return -EINVAL;
+ 
+-	memcpy(&gpt, data + GPT_PRIMARY_PARTITION_TABLE_LBA * mmc->read_bl_len,
+-	       sizeof(gpt));
+-
+-	/* Check the GPT header signature */
+-	if (le64_to_cpu(gpt.signature) != GPT_HEADER_SIGNATURE_UBOOT)
++	memcpy(&mbr, data, sizeof(mbr));
++	if (le16_to_cpu(mbr.signature) != MSDOS_MBR_SIGNATURE ||
++	    mbr.partition_record[0].sys_ind != EFI_PMBR_OSTYPE_EFI_GPT ||
++	    le32_to_cpu(mbr.partition_record[0].start_sect) != 1)
++		return -EINVAL;
++	for (i = 1; i < 4; i++)
++		if (mbr.partition_record[i].sys_ind)
++			return -EINVAL;
++
++	memcpy(&gpt, data + mmc->read_bl_len, sizeof(gpt));
++	/* Bound the CRC length before using the uploaded header size. */
++	if (le64_to_cpu(gpt.signature) != GPT_HEADER_SIGNATURE_UBOOT ||
++	    le32_to_cpu(gpt.revision) != GPT_HEADER_REVISION_V1 ||
++	    le32_to_cpu(gpt.header_size) != sizeof(gpt) || gpt.reserved1 ||
++	    le64_to_cpu(gpt.my_lba) != GPT_PRIMARY_PARTITION_TABLE_LBA ||
++	    le64_to_cpu(gpt.partition_entry_lba) != GPT_PRIMARY_PARTITION_ENTRY_LBA)
+ 		return -EINVAL;
+ 
+-	/* Check the GUID Partition Table CRC */
+-	memcpy(&crc32_backup, &gpt.header_crc32, sizeof(crc32_backup));
+-	memset(&gpt.header_crc32, 0, sizeof(gpt.header_crc32));
+-
+-	calc_crc32 = crc32(0, (const unsigned char *)&gpt,
+-			   le32_to_cpu(gpt.header_size));
+-
+-	memcpy(&gpt.header_crc32, &crc32_backup, sizeof(crc32_backup));
+-
+-	if (calc_crc32 != le32_to_cpu(crc32_backup))
++	crc32_backup = le32_to_cpu(gpt.header_crc32);
++	gpt.header_crc32 = 0;
++	if (crc32(0, (const unsigned char *)&gpt, sizeof(gpt)) != crc32_backup)
+ 		return -EINVAL;
+ 
+-	/* Check my_lba entry points to the LBA that contains the GPT */
+-	if (le64_to_cpu(gpt.my_lba) != GPT_PRIMARY_PARTITION_TABLE_LBA)
++	count = le32_to_cpu(gpt.num_partition_entries);
++	if (!count || count > 128 ||
++	    le32_to_cpu(gpt.sizeof_partition_entry) != sizeof(gpt_entry))
++		return -EINVAL;
++	entry_bytes = count * sizeof(gpt_entry);
++	entry_blocks = DIV_ROUND_UP(entry_bytes, mmc->read_bl_len);
++	if (size != (2 + entry_blocks) * mmc->read_bl_len ||
++	    crc32(0, data + 2 * mmc->read_bl_len, entry_bytes) !=
++	    le32_to_cpu(gpt.partition_entry_array_crc32))
+ 		return -EINVAL;
+ 
+-	/* Check if the first_usable_lba is within the disk. */
+ 	lastlba = (u64)mmc_get_blk_desc(mmc)->lba;
+-	if (le64_to_cpu(gpt.first_usable_lba) >= lastlba)
++	if (lastlba <= 2 + 2 * entry_blocks)
++		return -EINVAL;
++	last_usable = lastlba - entry_blocks - 2;
++	first_usable = le64_to_cpu(gpt.first_usable_lba);
++	old_last = le64_to_cpu(gpt.last_usable_lba);
++	alternate = le64_to_cpu(gpt.alternate_lba);
++	if (alternate <= 2 + entry_blocks || first_usable < 2 + entry_blocks ||
++	    first_usable > old_last || first_usable > last_usable ||
++	    old_last >= alternate - entry_blocks)
+ 		return -EINVAL;
+ 
+-	/* Adjust gpt.alternate_lba to the last LBA */
+-	gpt.alternate_lba = cpu_to_le64(lastlba - 1);
+-
+-	/* Adjust last_usable_lba to the LBA just before 2nd partition table */
+-	/* Secondary gpt table doesn't need MBR */
+-	secondary_lba_num = DIV_ROUND_UP(size, mmc->read_bl_len) - 1;
+-	adjusted_last_usable_lba = lastlba - secondary_lba_num - 1;
+-	gpt.last_usable_lba = cpu_to_le64(adjusted_last_usable_lba);
++	/* Validate every used extent before either GPT copy can be written. */
++	for (i = 0; i < count; i++) {
++		memcpy(&entry, data + 2 * mmc->read_bl_len +
++		       i * sizeof(entry), sizeof(entry));
++		if (!memcmp(&entry.partition_type_guid, &empty_guid, sizeof(empty_guid)))
++			continue;
++		start = le64_to_cpu(entry.starting_lba);
++		end = le64_to_cpu(entry.ending_lba);
++		if (start < first_usable || start > end ||
++		    end > old_last || end > last_usable)
++			return -EINVAL;
++		for (j = 0; j < i; j++) {
++			memcpy(&previous, data + 2 * mmc->read_bl_len +
++			       j * sizeof(previous), sizeof(previous));
++			if (!memcmp(&previous.partition_type_guid, &empty_guid,
++				    sizeof(empty_guid)))
++				continue;
++			previous_start = le64_to_cpu(previous.starting_lba);
++			previous_end = le64_to_cpu(previous.ending_lba);
++			if (start <= previous_end && end >= previous_start)
++				return -EINVAL;
++		}
++	}
+ 
+-	/* Prompt to the user */
++	/* Resize only GPT metadata; never move or grow partition entries. */
++	gpt.alternate_lba = cpu_to_le64(lastlba - 1);
++	gpt.last_usable_lba = cpu_to_le64(last_usable);
+ 	printf("Last usable LBA in GPT adjusted to 0x%llx (original 0x%llx)\n",
+-	       adjusted_last_usable_lba, le64_to_cpu(gpt.last_usable_lba));
+-
+-	/* Recalculate the CRC */
+-	memset(&gpt.header_crc32, 0, sizeof(gpt.header_crc32));
+-
+-	calc_crc32 = crc32(0, (const unsigned char *)&gpt,
+-			   le32_to_cpu(gpt.header_size));
+-
+-	memcpy(&gpt.header_crc32, &calc_crc32, sizeof(calc_crc32));
+-
+-	/* Write-back changes */
+-	memcpy(data + GPT_PRIMARY_PARTITION_TABLE_LBA * mmc->read_bl_len, &gpt,
+-	       sizeof(gpt));
++	       last_usable, old_last);
++	gpt.header_crc32 = cpu_to_le32(crc32(0, (const unsigned char *)&gpt,
++					   sizeof(gpt)));
++	mbr.partition_record[0].nr_sects = cpu_to_le32(lastlba - 1 > 0xffffffffULL ?
++						     0xffffffffU : (u32)(lastlba - 1));
++	memcpy(data, &mbr, sizeof(mbr));
++	memcpy(data + mmc->read_bl_len, &gpt, sizeof(gpt));
+ 
+ 	return 0;
+ }
+ 
+-static int backup_secondary_gpt(struct mmc *mmc, void *data,
+-                                size_t size, size_t max_size)
++static int backup_secondary_gpt(struct mmc *mmc, void *data, size_t max_size)
+ {
+ 	u64 lastlba, backup_offset, secondary_lba;
+ 	u32 calc_crc32, partition_entry_size;
+@@ -593,24 +627,23 @@ static int backup_secondary_gpt(struct mmc *mmc, void *data,
+ 	gpt_header gpt;
+ 	int ret;
+ 
+-	/* Size of 2nd_gpt_partition_table is one LBA size less than primary */
+-	secondary_size = size - GPT_PRIMARY_PARTITION_TABLE_LBA * mmc->read_bl_len;
+-	secondary_lba = DIV_ROUND_UP(secondary_size, mmc->read_bl_len);
+-	partition_entry_size = secondary_size -
+-			       (GPT_PRIMARY_PARTITION_TABLE_LBA * mmc->read_bl_len);
+-
+ 	memcpy(&gpt, data + GPT_PRIMARY_PARTITION_TABLE_LBA * mmc->read_bl_len,
+ 	       sizeof(gpt));
++	partition_entry_size = le32_to_cpu(gpt.num_partition_entries) *
++			       le32_to_cpu(gpt.sizeof_partition_entry);
++	partition_entry_size = DIV_ROUND_UP(partition_entry_size,
++					   mmc->read_bl_len) * mmc->read_bl_len;
++	secondary_size = partition_entry_size + mmc->read_bl_len;
++	secondary_lba = secondary_size / mmc->read_bl_len;
+ 
+ 	/* Move partition entry to the beginning of data */
+ 	memmove(data, data + GPT_PRIMARY_PARTITION_ENTRY_LBA * mmc->read_bl_len,
+ 		partition_entry_size);
+ 
+-	/* Adjust secondary gpt.my_lba */
+-	gpt.my_lba = cpu_to_le64(gpt.alternate_lba);
+-
+-	/* Adjust secondary gpt.partition_entry_lba */
+ 	lastlba = (u64)mmc_get_blk_desc(mmc)->lba;
++	gpt.my_lba = cpu_to_le64(lastlba - 1);
++	/* A secondary header points back to the primary, never to itself. */
++	gpt.alternate_lba = cpu_to_le64(GPT_PRIMARY_PARTITION_TABLE_LBA);
+ 	gpt.partition_entry_lba = cpu_to_le64(lastlba - secondary_lba);
+ 
+ 	/* Recalculate the CRC */
+@@ -619,7 +652,7 @@ static int backup_secondary_gpt(struct mmc *mmc, void *data,
+ 	calc_crc32 = crc32(0, (const unsigned char *)&gpt,
+ 			   le32_to_cpu(gpt.header_size));
+ 
+-	memcpy(&gpt.header_crc32, &calc_crc32, sizeof(calc_crc32));
++	gpt.header_crc32 = cpu_to_le32(calc_crc32);
+ 
+ 	/* Copy gpt_header to data */
+ 	memcpy(data + partition_entry_size, &gpt, sizeof(gpt));
+@@ -627,13 +660,13 @@ static int backup_secondary_gpt(struct mmc *mmc, void *data,
+ 	       mmc->read_bl_len - sizeof(gpt));
+ 
+ 	/* Write secondary gpt partition to mmc */
+-	backup_offset =(lastlba - secondary_lba) * mmc->read_bl_len;
++	backup_offset = (lastlba - secondary_lba) * mmc->read_bl_len;
+ 	ret = _mmc_write(mmc, backup_offset, max_size, data,
+ 			 secondary_size, true);
+ 	if (ret)
+ 		return ret;
+ 
+-	printf("*** Secondary GPT has been written to 0x%llx ***",
++	printf("*** Secondary GPT has been written to 0x%llx ***\n",
+ 		backup_offset);
+ 
+ 	return 0;
+@@ -645,19 +678,24 @@ int mmc_write_gpt(u32 dev, int hwpart, size_t max_size, const void *data,
+ 	struct mmc *mmc;
+ 	int ret;
+ 
++	if (max_size && size > max_size)
++		return -EINVAL;
++
+ 	mmc = _mmc_get_dev(dev, hwpart, true);
+ 	if (!mmc)
+ 		return -ENODEV;
+ 
+-	adjust_gpt(mmc, (void *)data, size);
++	ret = adjust_gpt(mmc, (void *)data, size);
++	if (ret)
++		return ret;
+ 
+ 	ret = _mmc_write(mmc, 0, max_size, data, size, true);
+ 	if (ret)
+ 		return ret;
+ 
+ 	/* BackUp Secondary GPT header & GPT Partition Entry */
+-	ret = backup_secondary_gpt(mmc, (void *)data, size, max_size);
+-	if(ret)
++	ret = backup_secondary_gpt(mmc, (void *)data, max_size);
++	if (ret)
+ 		return ret;
+ 
+ #ifdef CONFIG_PARTITIONS

@@ -26,6 +26,7 @@ generated
 dt.dtb.S
 u-boot.cfg
 *.patch
+!ci/patches/s20p-gpt.patch
 /uboot*/include/config
 /uboot*/u-boot.lds
 /uboot*/u-boot
