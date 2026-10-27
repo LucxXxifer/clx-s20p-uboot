@@ -84,6 +84,11 @@ def verify_directory(directory):
                 "CONFIG_WEBUI_FAILSAFE_GPT=y", "CONFIG_MTK_DHCPD=y",
                 "CONFIG_ENV_IS_IN_MMC=y", "CONFIG_OF_EMBED=y"}
     require(expected <= cfg, "Missing expected S20P/recovery/GPT configuration")
+    atf = set(data["atf.config"].decode().splitlines())
+    require({"_PLAT_MT7986=y", "_DRAM_DDR4=y", "_BOOT_DEVICE_EMMC=y"} <= atf,
+            "Missing expected S20P ATF platform/memory/storage configuration")
+    require(not {"_ENABLE_FIP_COMPRESS=y", "FIP_COMPRESS=1"} & atf,
+            "Expected uncompressed FIP configuration")
     source = json.loads(data["source.json"])
     source_reviewed(source["reviewed_upstream_sha"], source["upstream_sha"])
     require(source["board"] == "mt7986_clx_s20" and source["version"] == "SP2",

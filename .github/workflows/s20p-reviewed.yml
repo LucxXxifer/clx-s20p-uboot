@@ -114,6 +114,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm --platform linux/amd64 --cap-drop ALL \
+            --user "$(id -u):$(id -g)" --env npm_config_cache=/tmp/npm-cache \
             --security-opt no-new-privileges \
             --mount "type=bind,src=$RUNNER_TEMP/source,dst=/source" \
             s20p-builder bash -euo pipefail -c \
@@ -124,6 +125,7 @@ jobs:
           set -euo pipefail
           mkdir "$RUNNER_TEMP/out"
           docker run --rm --platform linux/amd64 --network none --cap-drop ALL \
+            --user "$(id -u):$(id -g)" \
             --security-opt no-new-privileges \
             --mount "type=bind,src=$RUNNER_TEMP/source,dst=/source" \
             --mount "type=bind,src=$RUNNER_TEMP/out,dst=/out" \

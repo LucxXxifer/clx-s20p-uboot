@@ -106,6 +106,28 @@ CONFIG_OF_EMBED=y
             (destination / name).write_bytes(value)
         return source
 
+    def test_wrong_atf_platform_memory_or_storage_is_rejected(self):
+        expected = "_PLAT_MT7986=y\n_DRAM_DDR4=y\n_BOOT_DEVICE_EMMC=y\n"
+        for correct, wrong in (("_PLAT_MT7986=y", "_PLAT_MT7981=y"),
+                               ("_DRAM_DDR4=y", "_DRAM_DDR3=y"),
+                               ("_BOOT_DEVICE_EMMC=y", "_BOOT_DEVICE_NOR=y")):
+            with self.subTest(setting=correct), tempfile.TemporaryDirectory() as td:
+                directory = Path(td) / "build"
+                self.directory(directory)
+                (directory / "atf.config").write_text(expected.replace(correct, wrong))
+                with self.assertRaisesRegex(ValueError, "ATF"):
+                    self.verify.verify_directory(directory)
+
+    def test_compressed_fip_configuration_is_rejected(self):
+        for setting in ("_ENABLE_FIP_COMPRESS=y", "FIP_COMPRESS=1"):
+            with self.subTest(setting=setting), tempfile.TemporaryDirectory() as td:
+                directory = Path(td) / "build"
+                self.directory(directory)
+                config = directory / "atf.config"
+                config.write_text(config.read_text() + setting + "\n")
+                with self.assertRaisesRegex(ValueError, "uncompressed"):
+                    self.verify.verify_directory(directory)
+
     def test_different_clean_builds_cannot_release(self):
         with tempfile.TemporaryDirectory() as td:
             left, right = Path(td) / "left", Path(td) / "right"
