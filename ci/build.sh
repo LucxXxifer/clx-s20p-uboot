@@ -22,7 +22,7 @@ bash build.sh
 cp atf-20260123/build/mt7986/release/fip.bin /out/fip.bin
 cp atf-20260123/build/mt7986/release/bl31.bin /out/bl31.bin
 cp uboot-mtk-20250711/u-boot.bin /out/u-boot.bin
-cp uboot-mtk-20250711/u-boot.dtb /out/u-boot.dtb
+cp uboot-mtk-20250711/dts/dt.dtb /out/u-boot.dtb
 cp uboot-mtk-20250711/.config /out/uboot.config
 cp atf-20260123/build/.config /out/atf.config
 cp source.json /out/source.json
