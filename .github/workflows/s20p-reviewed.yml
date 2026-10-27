@@ -1,0 +1,233 @@
+name: S20P reviewed FIP
+
+on:
+  schedule:
+    - cron: '37 19 * * *' # 03:37 Asia/Shanghai; GitHub may delay scheduled runs.
+  workflow_dispatch:
+  push:
+    branches: [clx-s20p]
+  pull_request:
+    branches: [clx-s20p]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s20p-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      upstream_sha: ${{ steps.source.outputs.sha }}
+      reviewed: ${{ steps.source.outputs.reviewed }}
+      cached: ${{ steps.marker.outputs.cache-hit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: ci
+      - name: Resolve exact upstream source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          reviewed=$(python3 -c 'import json; print(json.load(open("ci/source.lock.json"))["upstream_sha"])')
+          if [[ "$EVENT_NAME" == schedule ]]; then
+            upstream=$(gh api repos/Yuzhii0718/bl-mt798x-dhcpd/commits/master --jq .sha)
+          else
+            upstream=$reviewed
+          fi
+          [[ "$upstream" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$upstream" >> "$GITHUB_OUTPUT"
+          echo "reviewed=$([[ "$upstream" == "$reviewed" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "Upstream: $upstream; reviewed: $reviewed" >> "$GITHUB_STEP_SUMMARY"
+      - name: Skip unchanged scheduled source and policy
+        id: marker
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .s20p-checked
+          key: s20p-checked-${{ github.sha }}-${{ steps.source.outputs.sha }}
+
+  regression:
+    needs: plan
+    if: needs.plan.outputs.cached != 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            ci
+            uboot-mtk-20250711
+      - name: Native sanitizer regression and release-policy tests
+        env:
+          CC: clang
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s ci/tests -v
+      - name: Prepare exact source with reviewed patch
+        env:
+          SOURCE_SHA: ${{ needs.plan.outputs.upstream_sha }}
+        run: python3 ci/prepare_source.py --sha "$SOURCE_SHA" --destination "$RUNNER_TEMP/source"
+      - name: Test the patched upstream revision
+        env:
+          S20P_SOURCE_ROOT: ${{ runner.temp }}/source
+          CC: clang
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s ci/tests -v
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-review
+          path: ${{ runner.temp }}/source/source.json
+          if-no-files-found: error
+
+  build:
+    needs: [plan, regression]
+    strategy:
+      fail-fast: false
+      matrix:
+        replica: [a, b]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            ci
+            uboot-mtk-20250711/board/mediatek/common
+      - name: Prepare exact source with reviewed patch
+        env:
+          SOURCE_SHA: ${{ needs.plan.outputs.upstream_sha }}
+        run: python3 ci/prepare_source.py --sha "$SOURCE_SHA" --destination "$RUNNER_TEMP/source"
+      - name: Build pinned environment
+        run: docker build --platform linux/amd64 --tag s20p-builder --file ci/Dockerfile ci
+      - name: Fetch integrity-locked JS dependencies without lifecycle scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --mount "type=bind,src=$RUNNER_TEMP/source,dst=/source" \
+            s20p-builder bash -euo pipefail -c \
+            'cd uboot-mtk-20250711/failsafe/embedded; npm ci --ignore-scripts --no-audit --no-fund; touch .npm-install-done'
+      - name: Compile without network
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/out"
+          docker run --rm --platform linux/amd64 --network none --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --mount "type=bind,src=$RUNNER_TEMP/source,dst=/source" \
+            --mount "type=bind,src=$RUNNER_TEMP/out,dst=/out" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/ci/build.sh,dst=/ci/build.sh,readonly" \
+            s20p-builder bash /ci/build.sh
+      - name: Inspect exact components and board configuration
+        run: python3 ci/verify_build.py "$RUNNER_TEMP/out" --output "$RUNNER_TEMP/out/verification.json"
+      - name: Publish audit report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-report-${{ matrix.replica }}
+          path: |
+            ${{ runner.temp }}/out/verification.json
+            ${{ runner.temp }}/out/toolchain.txt
+          if-no-files-found: error
+      - name: Retain binaries only for reviewed source
+        if: needs.plan.outputs.reviewed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: checked-build-${{ matrix.replica }}
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+          retention-days: 30
+
+  audit:
+    needs: [plan, build]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: build-report-*
+          path: reports
+      - name: Compare both build reports, including unreviewed candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp reports/build-report-a/verification.json reports/build-report-b/verification.json
+          cmp reports/build-report-a/toolchain.txt reports/build-report-b/toolchain.txt
+          echo "Two independent clean builds match." >> "$GITHUB_STEP_SUMMARY"
+      - name: Mark source awaiting review
+        if: needs.plan.outputs.reviewed != 'true'
+        run: echo 'Upstream changed. Review source-review artifact and commit the reviewed SHA before generating a downloadable FIP.' >> "$GITHUB_STEP_SUMMARY"
+
+  candidate:
+    needs: [plan, regression, build, audit]
+    if: >-
+      needs.plan.outputs.reviewed == 'true' &&
+      github.ref == 'refs/heads/clx-s20p' &&
+      github.event_name != 'pull_request'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            ci
+            uboot-mtk-20250711/board/mediatek/common
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: checked-build-*
+          path: ${{ runner.temp }}/builds
+      - name: Compare independent builds and enforce source-review gate
+        env:
+          SOURCE_SHA: ${{ needs.plan.outputs.upstream_sha }}
+        run: |
+          python3 ci/pipeline.py \
+            --left "$RUNNER_TEMP/builds/checked-build-a" \
+            --right "$RUNNER_TEMP/builds/checked-build-b" \
+            --sha "$SOURCE_SHA" --destination "$RUNNER_TEMP/release"
+      - name: Publish immutable prerelease candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.plan.outputs.upstream_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="s20p-gptfix-${SOURCE_SHA:0:12}-${GITHUB_SHA:0:12}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Candidate already exists; assets will not be replaced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh release create "$tag" "$RUNNER_TEMP/release/"* \
+            --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "CLX-S20P GPT fix candidate ${SOURCE_SHA:0:12}" \
+            --notes-file "$RUNNER_TEMP/release/RELEASE-NOTES.md"
+          echo "Candidate: https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag" >> "$GITHUB_STEP_SUMMARY"
+
+  record:
+    needs: [plan, regression, build, audit, candidate]
+    if: >-
+      always() && github.event_name == 'schedule' &&
+      needs.regression.result == 'success' && needs.build.result == 'success' &&
+      needs.audit.result == 'success' &&
+      (needs.plan.outputs.reviewed != 'true' || needs.candidate.result == 'success')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - run: mkdir .s20p-checked
+      - run: touch .s20p-checked/done
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .s20p-checked
+          key: s20p-checked-${{ github.sha }}-${{ needs.plan.outputs.upstream_sha }}
