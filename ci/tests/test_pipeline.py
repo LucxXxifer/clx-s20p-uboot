@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0
 import hashlib
 import importlib
+import json
 from pathlib import Path
+import shutil
 import struct
 import sys
+import tempfile
 import unittest
 import zlib
 
@@ -14,8 +17,8 @@ BL33 = "d6d0eea7fcead54b97829934f234b6e4"
 CHECKSUM = "a2cceab7f8254b279704633a6fd69ad8"
 
 
-def fixture():
-    bl31, bl33 = b"A" * 512, b"B" * 8192
+def fixture(dtb=b""):
+    bl31, bl33 = b"A" * 512, b"B" * 8192 + dtb
     pos = 176
     toc = bytearray(struct.pack("<IIQ", 0xAA640001, 0x12345678, 0))
     for uid, data in ((BL31, bl31), (BL33, bl33), (CHECKSUM, bytes(40))):
@@ -69,6 +72,66 @@ class ArtifactTests(unittest.TestCase):
         for sha in ("master", "1" * 12, "$(id)", "A" * 40, "1" * 40 + "\n"):
             with self.subTest(sha=sha), self.assertRaises(ValueError):
                 self.verify.source_reviewed(reviewed, sha)
+
+    def directory(self, destination):
+        root = Path(__file__).resolve().parents[2]
+        lock_data = (root / "ci/source.lock.json").read_bytes()
+        lock = json.loads(lock_data)
+        destination.mkdir()
+        dtb = bytes.fromhex("d00dfeed") + bytes(44)
+        image, bl31, bl33 = fixture(dtb)
+        config = '''CONFIG_DEFAULT_DEVICE_TREE="mt7986a-clx_s20"
+CONFIG_IPADDR="192.168.1.1"
+CONFIG_TARGET_MT7986=y
+CONFIG_MMC_MTK=y
+CONFIG_MTK_WEB_FAILSAFE=y
+CONFIG_WEBUI_FAILSAFE_GPT=y
+CONFIG_MTK_DHCPD=y
+CONFIG_ENV_IS_IN_MMC=y
+CONFIG_OF_EMBED=y
+'''
+        source = {"upstream_sha": lock["upstream_sha"],
+                  "reviewed_upstream_sha": lock["upstream_sha"],
+                  "source_reviewed": True, "board": lock["board"],
+                  "version": lock["version"], "lock_sha256": self.verify.sha(lock_data),
+                  "patch_sha256": self.verify.sha((root / "ci/patches/s20p-gpt.patch").read_bytes()),
+                  "patched_mmc_sha256": self.verify.sha((root /
+                      "uboot-mtk-20250711/board/mediatek/common/mmc_helper.c").read_bytes())}
+        for name, value in {"fip.bin": image, "bl31.bin": bl31, "u-boot.bin": bl33,
+                            "u-boot.dtb": dtb, "uboot.config": config.encode(),
+                            "atf.config": b"_PLAT_MT7986=y\n_DRAM_DDR4=y\n_BOOT_DEVICE_EMMC=y\n",
+                            "dtb-memory.txt": b"40000000 80000000\n",
+                            "toolchain.txt": b"synthetic-test-toolchain\n",
+                            "source.json": json.dumps(source).encode()}.items():
+            (destination / name).write_bytes(value)
+        return source
+
+    def test_different_clean_builds_cannot_release(self):
+        with tempfile.TemporaryDirectory() as td:
+            left, right = Path(td) / "left", Path(td) / "right"
+            self.directory(left)
+            shutil.copytree(left, right)
+            self.assertEqual(self.verify.compare_directories(left, right)
+                             ["independent_matching_builds"], 2)
+            (right / "toolchain.txt").write_text("changed compiler\n")
+            with self.assertRaisesRegex(ValueError, "builds differ"):
+                self.verify.compare_directories(left, right)
+
+    def test_release_requires_review_and_trusted_provenance(self):
+        pipeline = importlib.import_module("pipeline")
+        with tempfile.TemporaryDirectory() as td:
+            left, right, output = (Path(td) / name for name in ("left", "right", "release"))
+            source = self.directory(left)
+            shutil.copytree(left, right)
+            with self.assertRaisesRegex(ValueError, "has not been reviewed"):
+                pipeline.release_files(left, right, "2" * 40, output)
+            self.assertFalse(output.exists())
+            source["patch_sha256"] = "0" * 64
+            for directory in (left, right):
+                (directory / "source.json").write_text(json.dumps(source))
+            with self.assertRaisesRegex(ValueError, "provenance"):
+                pipeline.release_files(left, right, source["upstream_sha"], output)
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

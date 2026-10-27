@@ -6,8 +6,8 @@ CLX-S20P **MT7986A／2-GiB DDR4／eMMC** 專用維護分支，fork 自
 不是 Breed 移植，亦不保證 bootloader 被破壞後仍可透過 Reset 救援。
 
 - [從 0 到 1 刷機 skill 與固件](https://github.com/LucxXxifer/clx-s20p-firmware)
-- [每日檢查與建置](../../actions/workflows/s20p-reviewed.yml)
-- [候選版本與 SHA-256](../../releases)
+- [每日檢查與建置](https://github.com/LucxXxifer/clx-s20p-uboot/actions/workflows/s20p-reviewed.yml)
+- [候選版本與 SHA-256](https://github.com/LucxXxifer/clx-s20p-uboot/releases)
 - [上游原始說明](docs/UPSTREAM-README.md)
 
 ## 修復內容

@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: GPL-2.0
 FROM ubuntu:22.04@sha256:e0f80c829509ef4df9e76bd8944eb7b8ec25cbb379b112a7f9448b2c77a77c9b
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+# Minimal Ubuntu has no CA bundle; bootstrap with a dated, digest-verified bundle.
+ADD --checksum=sha256:796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe \
+    https://curl.se/ca/cacert-2026-10-20.pem /etc/ssl/certs/ca-certificates.crt
 # Dated, signed APT metadata pins the complete compiler/native dependency set.
 RUN printf '%s\n' \
-    'deb [check-valid-until=no] http://snapshot.ubuntu.com/ubuntu/20261026T000000Z jammy main universe' \
-    'deb [check-valid-until=no] http://snapshot.ubuntu.com/ubuntu/20261026T000000Z jammy-updates main universe' \
-    'deb [check-valid-until=no] http://snapshot.ubuntu.com/ubuntu/20261026T000000Z jammy-security main universe' \
+    'deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261026T000000Z jammy main universe' \
+    'deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261026T000000Z jammy-updates main universe' \
+    'deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261026T000000Z jammy-security main universe' \
     > /etc/apt/sources.list \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
