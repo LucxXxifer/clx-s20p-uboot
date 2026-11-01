@@ -7,7 +7,8 @@ CLX-S20P **MT7986A／2-GiB DDR4／eMMC** 專用維護分支，fork 自
 
 - [從 0 到 1 刷機 skill 與固件](https://github.com/LucxXxifer/clx-s20p-firmware)
 - [每日檢查與建置](https://github.com/LucxXxifer/clx-s20p-uboot/actions/workflows/s20p-reviewed.yml)
-- [候選版本與 SHA-256](https://github.com/LucxXxifer/clx-s20p-uboot/releases)
+- [GPT 修正正式版與 SHA-256](https://github.com/LucxXxifer/clx-s20p-uboot/releases/tag/s20p-gptfix-e4cf4dc72d45-d4c326981f44)
+- [所有正式與候選版本](https://github.com/LucxXxifer/clx-s20p-uboot/releases)
 - [上游原始說明](docs/UPSTREAM-README.md)
 
 ## 修復內容
@@ -46,9 +47,15 @@ GitHub Actions 每日 **03:37（Asia/Shanghai）** 檢查上游 master；排程�
 Release 僅提供未壓縮 FIP、`SHA256SUMS`、`audit.json`、來源 lock 和說明。
 不提供 BL2、不包含原廠備份、不連線或刷寫設備。
 
-**候選版尚未完成這個映像的實機開機、Reset 救援、GPT 寫入讀回、固件啟動及
-原廠還原驗證。** CI 無法代替這些驗收；通過後才可另外建立 stable 版本。
-兩次編譯一致證明可重現，並不證明所有硬體行為正確或沒有未知漏洞。
+**GPT 修正正式版**：維護者於 **2026-11-01** 確認修正版已通過 CLX-S20P
+實機使用，據此將既有 `s20p-gptfix-e4cf4dc72d45-d4c326981f44` Release
+轉為正式版。FIP、tag、SHA-256 與原始 CI 稽核附件保留不變；附件內的候選版
+說明記錄建置當時狀態，當前發布狀態以 Release 頁面為準。
+
+本次實機使用確認由維護者提供，未附逐項 Reset 救援、GPT 寫入讀回及原廠還原
+測試紀錄，因此不將這些情境一併標記通過。後續 CI 自動產物仍先作為候選版，
+再按各映像的實機驗證結果決定是否轉正式。兩次編譯一致證明可重現，並不證明
+所有硬體行為正確或沒有未知漏洞。
 
 刷入修復版 FIP 不會自動修好之前已寫壞的 GPT。後續新刷 GPT 仍先讀回主副表；
 確認有效後才可省略 agent 修復。原廠恢復依然依賴每臺設備獨有的備份、幾何和
